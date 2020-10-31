@@ -91,7 +91,7 @@ class NaomiRom:
 
     @property
     def valid(self) -> bool:
-        return self.data[0x000:0x010] == b'NAOMI           '
+        return self.data[0x000:0x010] == b'NAOMI           ' or self.data[0x000:0x010] == b'Naomi2          '
 
     def _raise_on_invalid(self) -> None:
         if not self.valid:
