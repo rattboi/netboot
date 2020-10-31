@@ -82,8 +82,9 @@ uint32_t *maple_swap_data(unsigned int port, int peripheral, unsigned int cmd, u
     // Now, construct the maple request transfer descriptor.
     memset((void *)send, 0, 1024);
     send[0] = (
-        1 << 31 |       // This is the last entry in the transfer descriptor.
-        datalen & 0xFF  // Length is how many extra bytes of payload we are including.
+        1 << 31 |                // This is the last entry in the transfer descriptor.
+        ((port & 0x3) << 16) |   // Set DMA port as well
+        datalen & 0xFF           // Length is how many extra bytes of payload we are including.
     );
     send[1] = buffer;
     send[2] = (
@@ -281,11 +282,12 @@ int maple_request_self_test()
  *
  * Return 0 on success
  *        -1 on unexpected packet received
- *        -2 on bad memory written
- *        -3 on bad crc
- *        -4 on failure to boot code.
+ *        -2 on bad payload length received
+ *        -3 on bad memory written
+ *        -4 on bad crc
+ *        -5 on failure to boot code.
  */
-int maple_request_update(void *binary, unsigned int len)
+int maple_request_update(void *binary, unsigned int len, uint8_t* ret_val)
 {
     uint8_t *binloc = (uint8_t *)binary;
     unsigned int memloc = 0x8010;
@@ -301,8 +303,8 @@ int maple_request_update(void *binary, unsigned int len)
         memcpy(&data[4], binloc, len > 24 ? 24 : len);
 
         // Now, set the address to copy to.
-        data[0] = memloc & 0xFF;
-        data[1] = (memloc >> 8) & 0xFF;
+        data[3] = memloc & 0xFF;
+        data[2] = (memloc >> 8) & 0xFF;
 
         // Now, calculate the checksum.
         uint8_t checksum = 0;
@@ -313,21 +315,22 @@ int maple_request_update(void *binary, unsigned int len)
 
         resp = maple_swap_data(0, 0, MAPLE_NAOMI_UPLOAD_CODE_REQUEST, 28 / 4, data);
 
-        if(maple_response_code(resp) != MAPLE_NAOMI_UPLOAD_CODE_RESPONSE)
+        if((maple_response_code(resp) != MAPLE_NAOMI_UPLOAD_CODE_RESPONSE) && (maple_response_code(resp) != MAPLE_NAOMI_UPLOAD_CODE_BOOTUP_RESPONSE))
         {
             return -1;
         }
         if(maple_response_payload_length_words(resp) != 0x1)
         {
-            return -1;
-        }
-        if((resp[1] >> 16) & 0xFFFF != memloc)
-        {
             return -2;
         }
-        if(resp[1] & 0xFF != checksum)
+        // this was backwards initially. For some reason this is written in big endian
+        if((((resp[1] & 0xFF0000) >> 8) | ((resp[1] & 0xFF000000) >> 24)) != memloc)
         {
             return -3;
+        }
+        if((resp[1] & 0xFF) != checksum)
+        {
+            return -4;
         }
 
         // Success! Move to next chunk
@@ -346,8 +349,9 @@ int maple_request_update(void *binary, unsigned int len)
         // TODO: A different value is returned by different revisions of the
         // MIE which depend on the Naomi BIOS. However, since netboot only
         // works on Rev. H BIOS, I think we're good here.
-        return -4;
+        return -5;
     }
+    return 0;
 }
 
 /**
@@ -595,7 +599,10 @@ void maple_request_jvs_assign_address(uint8_t old_addr, uint8_t new_addr)
  * Request JVS IO at addr to return a version ID string.
  *
  * Return 0 on success
- *        -1 on invalid packet received
+ *        -1 on no payload received
+ *        -2 on invalid packet received
+ *        -3 on bad status
+ *        -4 on non-report-type response
  */
 int maple_request_jvs_id(uint8_t addr, char *outptr)
 {
@@ -613,20 +620,20 @@ int maple_request_jvs_id(uint8_t addr, char *outptr)
     {
         // Packet failed CRC
         outptr[0] = 0;
-        return -1;
+        return -2;
     }
 
     if(jvs_packet_code(status.packet) != 0x01)
     {
         // Packet is not response type.
         outptr[0] = 0;
-        return -1;
+        return -3;
     }
     if(jvs_packet_payload(status.packet)[0] != 0x01)
     {
         // Packet is not report type.
         outptr[0] = 0;
-        return -1;
+        return -4;
     }
 
     memcpy(outptr, jvs_packet_payload(status.packet) + 1, jvs_packet_payload_length_bytes(status.packet) - 1);
