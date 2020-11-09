@@ -287,7 +287,7 @@ int maple_request_self_test()
  *        -4 on bad crc
  *        -5 on failure to boot code.
  */
-int maple_request_update(void *binary, unsigned int len, uint8_t* ret_val)
+int maple_request_update(void *binary, unsigned int len)
 {
     uint8_t *binloc = (uint8_t *)binary;
     unsigned int memloc = 0x8010;
